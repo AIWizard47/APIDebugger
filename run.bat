@@ -1,2 +1,1 @@
 g++ main.cpp http/http.cpp -o main -lws2_32 -lssl -lcrypto
-main    
