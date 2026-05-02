@@ -2,6 +2,7 @@
 #include <ws2tcpip.h>
 #include <iostream>
 #include <stdexcept>
+#include <filesystem>   
 
 #include <openssl/err.h>
 
@@ -39,12 +40,17 @@ void HTTPClient::initSSL() {
     if (!ctx) {
         throw std::runtime_error("SSL_CTX_new failed");
     }
-
+    std::string certPath =
+    (std::filesystem::current_path() /
+     ".." /
+     "certs" /
+     "ca-bundle.crt").string();
+    std::cout << certPath << std::endl;
     // 🔐 Basic verification (recommended)
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
     // SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
     // NOTE: On Windows/MSYS2 you may need to set a CA bundle path:
-    SSL_CTX_load_verify_locations(ctx, ".\\certs\\ca-bundle.crt", nullptr);
+    SSL_CTX_load_verify_locations(ctx, certPath.c_str(), nullptr);
     if (SSL_CTX_set_default_verify_paths(ctx) != 1)
     {
         ERR_print_errors_fp(stderr);
