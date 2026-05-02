@@ -1,4 +1,4 @@
-#include "http.h"
+#include "http/http.h"
 #include <ws2tcpip.h>
 #include <iostream>
 #include <stdexcept>
@@ -44,7 +44,7 @@ void HTTPClient::initSSL() {
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
     // SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
     // NOTE: On Windows/MSYS2 you may need to set a CA bundle path:
-    SSL_CTX_load_verify_locations(ctx, "C:\\msys64\\mingw64\\etc\\ssl\\certs\\ca-bundle.crt", nullptr);
+    SSL_CTX_load_verify_locations(ctx, ".\\certs\\ca-bundle.crt", nullptr);
     if (SSL_CTX_set_default_verify_paths(ctx) != 1)
     {
         ERR_print_errors_fp(stderr);

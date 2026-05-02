@@ -4,9 +4,14 @@ project(APIDebugger)
 
 set(CMAKE_CXX_STANDARD 17)
 
-find_package(OpenSSL REQUIRED)
+include_directories(
+    include
+    third_party/openssl/include
+)
 
-include_directories(include)
+link_directories(
+    third_party/openssl/lib
+)
 
 add_executable(api_tester
     main.cpp
@@ -15,6 +20,8 @@ add_executable(api_tester
 
 target_link_libraries(api_tester
     ws2_32
-    OpenSSL::SSL
-    OpenSSL::Crypto
+    ssl
+    crypto
 )
+
+include_directories(include)
