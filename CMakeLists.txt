@@ -16,6 +16,7 @@ link_directories(
 add_executable(api_tester
     main.cpp
     src/http.cpp
+    src/traffic.cpp
 )
 
 target_link_libraries(api_tester
