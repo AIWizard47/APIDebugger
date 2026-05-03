@@ -201,3 +201,63 @@ std::string HTTPClient::GET(const std::string& urlStr) {
 
     return response;
 }
+
+std::string HTTPClient::POST(const std::string& urlStr, const std::string& body, const std::string& contentType)
+{
+    URL url = parseURL(urlStr);
+
+    SOCKET sock = connectToHost(url.host, url.port);
+
+    SSL* ssl = nullptr;
+
+    if (url.is_https)
+    {
+        ssl = SSL_new(ctx);
+
+        SSL_set_fd(ssl, (int)sock);
+
+        // SNI
+        SSL_set_tlsext_host_name(ssl, url.host.c_str());
+
+        // hostname verification
+        X509_VERIFY_PARAM* param = SSL_get0_param(ssl);
+        X509_VERIFY_PARAM_set1_host(param, url.host.c_str(), 0);
+
+        if (SSL_connect(ssl) <= 0)
+        {
+            ERR_print_errors_fp(stderr);
+            throw std::runtime_error("TLS handshake failed");
+        }
+    }
+
+    // Build HTTP POST request
+    std::string req =
+        "POST " + url.path + " HTTP/1.1\r\n"
+        "Host: " + url.host + "\r\n"
+        "Content-Type: " + contentType + "\r\n"
+        "Content-Length: " + std::to_string(body.size()) + "\r\n"
+        "Connection: close\r\n"
+        "\r\n" +
+        body;
+
+    // Send
+    if (writeAll(sock, ssl, req.c_str(), (int)req.size()) <= 0) {
+        if (ssl) SSL_free(ssl);
+        closesocket(sock);
+        throw std::runtime_error("send/SSL_write failed");
+    }
+
+    // Read response
+    std::string response;
+    char buf[4096];
+    int n;
+
+    while ((n = readSome(sock, ssl, buf, sizeof(buf))) > 0) {
+        response.append(buf, n);
+    }
+
+    if (ssl) SSL_free(ssl);
+    closesocket(sock);
+
+    return response;
+}

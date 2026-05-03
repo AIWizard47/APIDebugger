@@ -18,6 +18,7 @@ public:
     ~HTTPClient();
 
     std::string GET(const std::string& url);
+    std::string POST(const std::string& url, const std::string& body, const std::string& contentType = "application/json");
 
 private:
     // lifecycle

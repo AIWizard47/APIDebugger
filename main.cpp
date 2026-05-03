@@ -17,6 +17,18 @@ int main(int argc, char* argv[]) {
         std::cout<<"Number of command : "<<argc<<"\n";
         std::cout << "---- HTTPS ----\n";
         std::cout << c.GET(url) << "\n";
+
+        std::cout << "---- POST HTTPS ----\n";
+                std::string json =
+            R"({"title":"Fuck","body":"you","userId":1})";
+
+        std::string response =
+            c.POST(
+                url,
+                json
+            );
+
+        std::cout << response << std::endl;
     }
     catch (const std::exception& e) {
         std::cout<<"Error: ";
