@@ -7,12 +7,7 @@
 #include <numeric>
 #include <iostream>
 
-void TrafficTester::worker(
-    const std::string& method,
-    const std::string& url,
-    const std::string& body,
-    int requestCount
-)
+void TrafficTester::worker(const std::string& method, const std::string& url, const std::string& body, int requestCount)
 {
     // each thread gets its own client
     HTTPClient client;
