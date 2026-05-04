@@ -1,51 +1,50 @@
-#include "http\http.h"
-#include <chrono>
+#include "http/http.h"
+#include "traffic/traffic.h"
 #include <iostream>
+#include <sstream>
+#include <iomanip>
 
-int main(int argc, char* argv[]) {
+int main() {
     try {
-        HTTPClient c;
-        std::string url;
-        // There is total numer of argument is 2 but indexing is start from 0 to its 0,1 total.
-        if (argc<2)
-        {
-            url = "https://example.com/";
-        }
-        else
-        {
-            url = argv[1];
-        }
-        std::cout<<"Number of command : "<<argc<<"\n";
-        std::cout << "---- HTTPS ----\n";
-        auto start = std::chrono::high_resolution_clock::now(); // Get current time point
-        // ... code to measure ...
-        std::string res = c.GET(url);
-        auto end = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> elapsed = end - start; // Difference
-        std::cout << res << "\n";
-        std::cout << "Waited: " << elapsed.count() << "ms\n";
+        TrafficTester tester;
 
+        std::string url    = "https://jsonplaceholder.typicode.com/posts";
+        int totalRequests  = 10;
+        int threadCount    = 4;
 
-        std::cout << "---- POST HTTPS ----\n";
-        std::string json =
-            R"({"title":"Hello","body":"To you","userId":23423423523541643661435346461351351345})";
-        start = std::chrono::high_resolution_clock::now(); // Get current time point
-        // ... code to measure ...
-        std::string response =
-            c.POST(
-                url,
-                json
-            );
-        end = std::chrono::high_resolution_clock::now();
-        elapsed = end - start; // Difference
-        std::cout << response << std::endl;
-        std::cout << "Waited: " << elapsed.count() << "ms\n";
+        std::cout << "Launching " << threadCount
+                  << " threads x " << (totalRequests / threadCount)
+                  << " requests each (thundering herd)\n\n";
 
+        TrafficResult r = tester.run("GET", url, totalRequests, threadCount,
+                                     /*body=*/"", /*thunderingHerd=*/true);
+
+        auto pct = [](double v) -> std::string {
+            std::ostringstream oss;
+            oss << std::fixed << std::setprecision(2) << v;
+            return oss.str();
+        };
+
+        std::cout << "---------------------------------------\n";
+        std::cout << "Total requests  : " << r.totalRequests    << "\n";
+        std::cout << "Success         : " << r.successRequests  << "\n";
+        std::cout << "Failed          : " << r.failedRequests   << "\n";
+        std::cout << "---------------------------------------\n";
+        std::cout << "Total time (ms) : " << pct(r.totalTimeMs)      << "\n";
+        std::cout << "RPS             : " << pct(r.requestsPerSecond) << "\n";
+        std::cout << "---------------------------------------\n";
+        std::cout << "Latency (ms)\n";
+        std::cout << "  min  : " << pct(r.minLatencyMs) << "\n";
+        std::cout << "  avg  : " << pct(r.avgLatencyMs) << "\n";
+        std::cout << "  p50  : " << pct(r.p50LatencyMs) << "\n";
+        std::cout << "  p95  : " << pct(r.p95LatencyMs) << "\n";
+        std::cout << "  p99  : " << pct(r.p99LatencyMs) << "\n";
+        std::cout << "  max  : " << pct(r.maxLatencyMs) << "\n";
+        std::cout << "---------------------------------------\n";
+
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal: " << e.what() << "\n";
     }
-    catch (const std::exception& e) {
-        std::cout<<"Error: ";
-        std::cerr << e.what() << "\n";
-    }
+
     std::cin.get();
-    return 0;
 }

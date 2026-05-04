@@ -49,4 +49,39 @@ private:
 
 };
 
+// ── NEW: holds one persistent TCP+TLS connection ──────────────────────────────
+class PersistentHTTPClient {
+    public:
+        PersistentHTTPClient();
+        ~PersistentHTTPClient();
+
+        // Connect once, reuse for many requests
+        bool connect(const std::string& urlStr);
+        void disconnect();
+        bool isConnected() const;
+
+        std::string GET(const std::string& path);
+        std::string POST(const std::string& path,
+                        const std::string& body,
+                        const std::string& contentType = "application/json");
+
+    private:
+        SSL_CTX* ctx_   = nullptr;
+        SSL*     ssl_   = nullptr;
+        SOCKET   sock_  = INVALID_SOCKET;
+        std::string host_;
+        int         port_ = 0;
+        bool        https_= false;
+
+        void initWinsock();
+        void initSSL();
+        bool reconnect();                   // re-open after server closes
+        std::string doRequest(const std::string& raw);
+
+        int writeAll(const char* data, int len);
+        int readSome(char* buf, int cap);
+        std::string readResponse();
+};
+
+
 #endif

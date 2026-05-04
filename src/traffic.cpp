@@ -1,3 +1,4 @@
+// traffic/traffic.cpp
 #include "traffic/traffic.h"
 #include "http/http.h"
 
@@ -6,151 +7,160 @@
 #include <algorithm>
 #include <numeric>
 #include <iostream>
+#include <atomic>
 
-void TrafficTester::worker(const std::string& method, const std::string& url, const std::string& body, int requestCount)
+// ──────────────────────────────────────────────────────────────────────────────
+// Barrier: spin until every thread has called in, then release all together.
+// std::barrier (C++20) would be cleaner but this works on C++17.
+// ──────────────────────────────────────────────────────────────────────────────
+
+static void waitForAll(std::atomic<int>& ready, int total) {
+    ready.fetch_add(1, std::memory_order_release);
+    // Spin-wait — tiny overhead, guarantees near-simultaneous launch
+    while (ready.load(std::memory_order_acquire) < total)
+        std::this_thread::yield();
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Per-thread worker
+// ──────────────────────────────────────────────────────────────────────────────
+
+void TrafficTester::worker(
+    const std::string& method,
+    const std::string& url,
+    const std::string& path,
+    const std::string& body,
+    int   requestCount,
+    std::atomic<int>& readyCount,
+    int   totalThreads,
+    bool  thunderingHerd)
 {
-    // each thread gets its own client
-    HTTPClient client;
-    for (int i = 0; i < requestCount; i++)
-    {
-        try
-        {
-            auto start =
-                std::chrono::high_resolution_clock::now();
+    // Each thread creates its OWN persistent connection
+    PersistentHTTPClient client;
 
-            std::string response;
+    try {
+        client.connect(url);    // one TLS handshake per thread
+    } catch (const std::exception& e) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        std::cerr << "[thread] connect failed: " << e.what() << "\n";
+        failCount_.fetch_add(requestCount, std::memory_order_relaxed);
+        return;
+    }
 
-            if (method == "GET")
+    if (thunderingHerd) {
+        // All threads hit the barrier; the last one releases everyone
+        waitForAll(readyCount, totalThreads);
+    }
+
+    for (int i = 0; i < requestCount; ++i) {
+        try {
+            auto t0 = std::chrono::high_resolution_clock::now();
+
+            std::string response = (method == "POST")
+                ? client.POST(path, body)
+                : client.GET(path);   // keep-alive: socket stays open
+
+            auto t1 = std::chrono::high_resolution_clock::now();
+            double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+            bool ok = response.find("HTTP/1.1 2") != std::string::npos
+                   || response.find("HTTP/1.1 3") != std::string::npos;
+
             {
-                response = client.GET(url);
+                std::lock_guard<std::mutex> lk(mtx_);
+                latencies_.push_back(ms);
             }
-            else if (method == "POST")
-            {
-                response = client.POST(url, body);
-            }
-            auto end =
-                std::chrono::high_resolution_clock::now();
 
-            double latency =
-                std::chrono::duration<double, std::milli>(
-                    end - start
-                ).count();
+            if (ok) successCount_.fetch_add(1, std::memory_order_relaxed);
+            else    failCount_.fetch_add(1,    std::memory_order_relaxed);
 
-            {
-                std::lock_guard<std::mutex> lock(mtx);
-
-                latencies.push_back(latency);
-
-                if (response.find("200") != std::string::npos ||
-                    response.find("201") != std::string::npos)
-                {
-                    successCount++;
-                }
-                else
-                {
-                    failCount++;
-                }
-            }
-            std::cout << "Thread done request "
-                      << i + 1
-                      << "\n";
-        }
-        catch (const std::exception& e)
-        {
-            std::lock_guard<std::mutex> lock(mtx);
-            std::cout << "Error: "
-                      << e.what()
-                      << "\n";
-
-            failCount++;
+        } catch (const std::exception& e) {
+            failCount_.fetch_add(1, std::memory_order_relaxed);
+            std::cerr << "[thread] request error: " << e.what() << "\n";
         }
     }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Percentile helper (call AFTER sorting)
+// ──────────────────────────────────────────────────────────────────────────────
+
+double TrafficTester::percentile(std::vector<double>& sorted, double p) {
+    if (sorted.empty()) return 0.0;
+    size_t idx = (size_t)(p / 100.0 * (sorted.size() - 1));
+    return sorted[std::min(idx, sorted.size() - 1)];
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Run
+// ──────────────────────────────────────────────────────────────────────────────
+
 TrafficResult TrafficTester::run(
-    HTTPClient& client,
     const std::string& method,
     const std::string& url,
-    int totalRequests,
-    int threadCount,
-    const std::string& body
-)
+    int   totalRequests,
+    int   threadCount,
+    const std::string& body,
+    bool  thunderingHerd)
 {
-    successCount = 0;
-    failCount = 0;
-    latencies.clear();
+    successCount_.store(0);
+    failCount_.store(0);
+    latencies_.clear();
+    latencies_.reserve(totalRequests);
 
-    auto totalStart =
-        std::chrono::high_resolution_clock::now();
+    // Pre-parse path from URL once
+    std::string path = "/";
+    auto strip = [](const std::string& u) -> std::pair<std::string,std::string> {
+        size_t off = u.rfind("://");
+        std::string rest = (off == std::string::npos) ? u : u.substr(off + 3);
+        size_t p = rest.find('/');
+        return { rest.substr(0, p == std::string::npos ? rest.size() : p),
+                 p == std::string::npos ? "/" : rest.substr(p) };
+    };
+    path = strip(url).second;
+
+    std::atomic<int> readyCount{0};
+    int perThread = totalRequests / threadCount;
+    int remainder = totalRequests % threadCount;
+
+    auto wallStart = std::chrono::high_resolution_clock::now();
 
     std::vector<std::thread> threads;
+    threads.reserve(threadCount);
 
-    int perThread =
-        totalRequests / threadCount;
-
-    for (int i = 0; i < threadCount; i++)
-    {
+    for (int i = 0; i < threadCount; ++i) {
+        int count = perThread + (i < remainder ? 1 : 0); // distribute remainder
         threads.emplace_back(
-            &TrafficTester::worker,
-            this,
-            method,
-            url,
-            body,
-            perThread
+            &TrafficTester::worker, this,
+            method, url, path, body, count,
+            std::ref(readyCount), threadCount, thunderingHerd
         );
     }
 
-    for (auto& t : threads)
-    {
-        t.join();
+    for (auto& t : threads) t.join();
+
+    auto wallEnd = std::chrono::high_resolution_clock::now();
+    double totalMs = std::chrono::duration<double, std::milli>(wallEnd - wallStart).count();
+
+    // Sort latencies once for all percentile calculations
+    std::sort(latencies_.begin(), latencies_.end());
+
+    TrafficResult r;
+    r.successRequests  = successCount_.load();
+    r.failedRequests   = failCount_.load();
+    r.totalRequests    = r.successRequests + r.failedRequests;
+    r.totalTimeMs      = totalMs;
+
+    if (!latencies_.empty()) {
+        r.minLatencyMs = latencies_.front();
+        r.maxLatencyMs = latencies_.back();
+        r.avgLatencyMs = std::accumulate(latencies_.begin(), latencies_.end(), 0.0)
+                         / latencies_.size();
+        r.p50LatencyMs = percentile(latencies_, 50.0);
+        r.p95LatencyMs = percentile(latencies_, 95.0);
+        r.p99LatencyMs = percentile(latencies_, 99.0);
     }
 
-    auto totalEnd =
-        std::chrono::high_resolution_clock::now();
-
-    double totalTime =
-        std::chrono::duration<double, std::milli>(
-            totalEnd - totalStart
-        ).count();
-
-    TrafficResult result;
-
-    result.totalRequests =
-        successCount + failCount;
-
-    result.successRequests =
-        successCount;
-
-    result.failedRequests =
-        failCount;
-
-    result.totalTimeMs =
-        totalTime;
-
-    if (!latencies.empty())
-    {
-        result.minLatencyMs =
-            *std::min_element(
-                latencies.begin(),
-                latencies.end()
-            );
-
-        result.maxLatencyMs =
-            *std::max_element(
-                latencies.begin(),
-                latencies.end()
-            );
-
-        result.avgLatencyMs =
-            std::accumulate(
-                latencies.begin(),
-                latencies.end(),
-                0.0
-            ) / latencies.size();
-    }
-
-    result.requestsPerSecond =
-        (result.totalRequests * 1000.0) / totalTime;
-
-    return result;
+    r.requestsPerSecond = (r.totalRequests * 1000.0) / totalMs;
+    return r;
 }
